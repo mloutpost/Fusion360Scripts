@@ -1,76 +1,16 @@
-import adsk.core, adsk.fusion, traceback
+import adsk.core, adsk.fusion, traceback, csv
+from fractions import Fraction
 
 app = None
 ui = None
-commandId = 'ApplyAppearanceToSelectionCommand'
-commandName = 'ApplyAppearanceToSelection'
-commandDescription = 'Apply an appearance to selected bodies or occurrences'
+commandId = 'MinimalBoundingBoxesToCSV'
+commandName = 'MinimalBoundingBoxes'
+commandDescription = 'Export Timber List as CSV'
+dialogTitle = "Create BOM"
 
 # global set of event handlers to keep them referenced for the duration of the command
 handlers = []
 appearancesMap = {}
-
-
-def replaceItems(cmdInput, newItems):
-    cmdInput.listItems.clear()
-    if len(newItems) > 0:
-        for item in newItems:
-            cmdInput.listItems.add(item, False, '')
-        cmdInput.listItems[0].isSelected = True
-
-
-def getAppearance(appearanceName):
-    materialLibs = app.materialLibraries
-    appearance = None
-    for materialLib in materialLibs:
-        appearances = materialLib.appearances
-
-        try:
-            appearance = appearances.itemByName(appearanceName)
-        except:
-            pass
-
-        if appearance:
-            break
-    return appearance
-
-
-def hasAppearances(lib):
-    if lib and lib.appearances.count > 0:
-        return True
-    return False
-
-
-def getMaterialLibNames(libFilter):
-    materialLibs = app.materialLibraries
-    libNames = []
-    for materialLib in materialLibs:
-        if (not libFilter) or libFilter(materialLib):
-            libNames.append(materialLib.name)
-    return libNames
-
-
-def getAppearancesFromLib(libName, filterExp):
-    global appearancesMap
-    appearanceList = None
-    if libName in appearancesMap:
-        appearanceList = appearancesMap[libName]
-    else:
-        materialLib = app.materialLibraries.itemByName(libName)
-        appearances = materialLib.appearances
-        appearanceNames = []
-        for appearance in appearances:
-            appearanceNames.append(appearance.name)
-        appearancesMap[libName] = appearanceNames
-        appearanceList = appearanceNames
-    if filterExp and len(filterExp) > 0:
-        filteredList = []
-        for appearanceName in appearanceList:
-            if appearanceName.lower().find(filterExp.lower()) >= 0:
-                filteredList.append(appearanceName)
-        return filteredList
-    else:
-        return appearanceList
 
 
 def getSelectedObjects(selectionInput):
@@ -79,83 +19,93 @@ def getSelectedObjects(selectionInput):
         selection = selectionInput.selection(i)
         selectedObj = selection.entity
         if type(selectedObj) is adsk.fusion.BRepBody or \
-                type(selectedObj) is adsk.fusion.BRepFace or \
                 type(selectedObj) is adsk.fusion.Occurrence:
             objects.append(selectedObj)
     return objects
 
 
-def applyAppearanceToObjects(appearance, objects):
-    for obj in objects:
-        obj.appearance = appearance
+def dec_to_proper_frac(dec):
+    sign = "-" if dec < 0 else ""
+    frac = Fraction(abs(dec))
+    if frac.numerator % frac.denominator == 0:
+        output = f"{sign}{frac.numerator // frac.denominator}"
+    else:
+        output = (f"{sign}{frac.numerator // frac.denominator} "
+                  f"{frac.numerator % frac.denominator}/{frac.denominator}")
+    return output
 
 
-class ApplyAppearanceInputChangedHandler(adsk.core.InputChangedEventHandler):
+def roundPartial(value, resolution):
+    return round(value / resolution) * resolution
+
+
+class TimberData:
+    def __init__(self, fusionObject):
+        self.fusionObject = fusionObject
+
+    def timberProperties(self):
+        sel_prop = {}
+
+        if type(self.fusionObject) is adsk.fusion.BRepBody or \
+                type(self.fusionObject) is adsk.fusion.Occurrence:
+            min_box = self.fusionObject.orientedMinimumBoundingBox
+            dimensions = [min_box.length, min_box.width, min_box.height] # access raw output from minimum bounding box object, names don't matter yet
+            dim_sorted = sorted(dimensions, reverse=True)
+            length, width, height = str(dec_to_proper_frac(roundPartial((dim_sorted[0]+(12*2.54)) / 2.54, 0.25))) + '"', \
+                                    str(dec_to_proper_frac(roundPartial(dim_sorted[1] / 2.54, 0.25))) + '"', \
+                                    str(dec_to_proper_frac(roundPartial(dim_sorted[2] / 2.54, 0.25))) + '"'
+            sel_prop["name"] = self.fusionObject.name
+            sel_prop["length"], sel_prop["width"], sel_prop["height"] = length, width, height
+        return sel_prop
+
+
+class SelectionHandler(adsk.core.CommandEventHandler):
     def __init__(self):
         super().__init__()
 
     def notify(self, args):
-        try:
-            cmd = args.firingEvent.sender
-            inputs = cmd.commandInputs
-            appearanceListInput = None
-            materialLibInput = None
-            filterInput = None
-            global commandId
-            for inputI in inputs:
-                if inputI.id == commandId + '_appearanceList':
-                    appearanceListInput = inputI
-                elif inputI.id == commandId + '_materialLib':
-                    materialLibInput = inputI
-                elif inputI.id == commandId + '_filter':
-                    filterInput = inputI
-            cmdInput = args.input
-            if cmdInput.id == commandId + '_materialLib' or cmdInput.id == commandId + '_filter':
-                appearances = getAppearancesFromLib(materialLibInput.selectedItem.name, filterInput.value)
-                replaceItems(appearanceListInput, appearances)
-        except:
-            if ui:
-                ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
+        global dialogTitle
 
-class ApplyAppearanceExecuteHandler(adsk.core.CommandEventHandler):
-    def __init__(self):
-        super().__init__()
-
-    def notify(self, args):
         try:
             cmd = args.firingEvent.sender
             inputs = cmd.commandInputs
             selectionInput = None
-            appearanceListInput = None
             for inputI in inputs:
                 global commandId
                 if inputI.id == commandId + '_selection':
                     selectionInput = inputI
-                elif inputI.id == commandId + '_appearanceList':
-                    appearanceListInput = inputI
 
             objects = getSelectedObjects(selectionInput)
+            obj_properties = []
+            for obj in objects:
+                obj_properties.append(obj)
 
             if not objects or len(objects) == 0:
                 return
 
-            if not appearanceListInput.selectedItem:
-                if ui:
-                    ui.messageBox('Appearance is not selected.')
+            fileDialog = ui.createFileDialog()
+            fileDialog.isMultiSelectEnabled = False
+            fileDialog.title = dialogTitle + " filename"
+            fileDialog.filter = 'CSV (*.csv);;TXT (*.txt);;All Files (*.*)'
+            fileDialog.filterIndex = 0
+            dialogResult = fileDialog.showSave()
+            if dialogResult == adsk.core.DialogResults.DialogOK:
+                filename = fileDialog.filename
+            else:
                 return
+            with open(filename, 'w', newline='') as csvfile:
+                for obj in obj_properties:
+                    fieldnames = ['name', 'length', 'width', 'height']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writerow(TimberData(obj).timberProperties())
 
-            appearance = getAppearance(appearanceListInput.selectedItem.name)
-            if not appearance:
-                return
-
-            applyAppearanceToObjects(appearance, objects)
         except:
             if ui:
                 ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
 
-class ApplyAppearanceDestroyHandler(adsk.core.CommandEventHandler):
+class DestroyHandler(adsk.core.CommandEventHandler):
     def __init__(self):
         super().__init__()
 
@@ -169,7 +119,7 @@ class ApplyAppearanceDestroyHandler(adsk.core.CommandEventHandler):
                 ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
 
-class ApplyAppearanceCreatedHandler(adsk.core.CommandCreatedEventHandler):
+class GUICommandBoxHandler(adsk.core.CommandCreatedEventHandler):
     def __init__(self):
         super().__init__()
 
@@ -177,37 +127,22 @@ class ApplyAppearanceCreatedHandler(adsk.core.CommandCreatedEventHandler):
         try:
             cmd = args.command
             cmd.isRepeatable = False
-            onExecute = ApplyAppearanceExecuteHandler()
+            onExecute = SelectionHandler()
             cmd.execute.add(onExecute)
 
-            onDestroy = ApplyAppearanceDestroyHandler()
+            # This is where I can add additional drop down features and buttons to export to csv file with various properties
+
+            onDestroy = DestroyHandler()
             cmd.destroy.add(onDestroy)
-            onInputChanged = ApplyAppearanceInputChangedHandler()
-            cmd.inputChanged.add(onInputChanged)
             # keep the handler referenced beyond this function
             handlers.append(onExecute)
             handlers.append(onDestroy)
-            handlers.append(onInputChanged)
             inputs = cmd.commandInputs
             global commandId
             selectionInput = inputs.addSelectionInput(commandId + '_selection', 'Select',
                                                       'Select bodies or occurrences')
             selectionInput.setSelectionLimits(1)
-            materialLibInput = inputs.addDropDownCommandInput(commandId + '_materialLib', 'Material Library',
-                                                              adsk.core.DropDownStyles.LabeledIconDropDownStyle)
-            listItems = materialLibInput.listItems
-            materialLibNames = getMaterialLibNames(hasAppearances)
-            for materialName in materialLibNames:
-                listItems.add(materialName, False, '')
-            listItems[0].isSelected = True
-            appearanceListInput = inputs.addDropDownCommandInput(commandId + '_appearanceList', 'Appearance',
-                                                                 adsk.core.DropDownStyles.TextListDropDownStyle)
-            appearances = getAppearancesFromLib(materialLibNames[0], '')
-            listItems = appearanceListInput.listItems
-            for appearanceName in appearances:
-                listItems.add(appearanceName, False, '')
-            listItems[0].isSelected = True
-            inputs.addStringValueInput(commandId + '_filter', 'Filter', '')
+
         except:
             if ui:
                 ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
@@ -229,7 +164,7 @@ def run(context):
             cmdDef = ui.commandDefinitions.addButtonDefinition(commandId, commandName,
                                                                commandDescription)  # no resource folder is specified, the default one will be used
 
-        onCommandCreated = ApplyAppearanceCreatedHandler()
+        onCommandCreated = GUICommandBoxHandler()
         cmdDef.commandCreated.add(onCommandCreated)
         # keep the handler referenced beyond this function
         handlers.append(onCommandCreated)
@@ -243,5 +178,3 @@ def run(context):
     except:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
-
-
