@@ -18,8 +18,7 @@ def getSelectedObjects(selectionInput):
     for i in range(0, selectionInput.selectionCount):
         selection = selectionInput.selection(i)
         selectedObj = selection.entity
-        if type(selectedObj) is adsk.fusion.BRepBody or \
-                type(selectedObj) is adsk.fusion.Occurrence:
+        if type(selectedObj) is adsk.fusion.Occurrence:
             objects.append(selectedObj)
     return objects
 
@@ -54,7 +53,7 @@ class TimberData:
             length, width, height = str(dec_to_proper_frac(roundPartial((dim_sorted[0]) / 2.54, 0.25))) + '"', \
                                     str(dec_to_proper_frac(roundPartial(dim_sorted[1] / 2.54, 0.25))) + '"', \
                                     str(dec_to_proper_frac(roundPartial(dim_sorted[2] / 2.54, 0.25))) + '"'
-            sel_prop["name"] = self.fusionObject.name
+            sel_prop["Occurrence"] = self.fusionObject.name
             sel_prop["length"], sel_prop["width"], sel_prop["height"] = length, width, height
         return sel_prop
 
@@ -77,9 +76,9 @@ class SelectionHandler(adsk.core.CommandEventHandler):
                     selectionInput = inputI
 
             objects = getSelectedObjects(selectionInput)
-            obj_properties = []
+            obj_properties = {}
             for obj in objects:
-                obj_properties.append(obj)
+                obj_properties[obj.component.name] = TimberData(obj).timberProperties() # uses dictionary to eliminate duplicate occurances in the output and obtain count
 
             if not objects or len(objects) == 0:
                 return
@@ -95,11 +94,11 @@ class SelectionHandler(adsk.core.CommandEventHandler):
             else:
                 return
             with open(filename, 'w', newline='') as csvfile:
-                fieldnames = ['Piece Name', 'Length', 'Width', 'Height']
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                for obj in obj_properties:
-                    writer.writerow(TimberData(obj).timberProperties())
+                fieldnames = ['Name', 'Qty', 'Length', 'Width', 'Height']
+                writer = csv.writer(csvfile)
+                writer.writerow(fieldnames)
+                for name, obj in obj_properties.items():
+                    writer.writerow([name, obj["Occurrence"], obj['length'], obj['width'], obj['height']])
 
         except:
             if ui:
