@@ -51,7 +51,7 @@ class TimberData:
             min_box = self.fusionObject.orientedMinimumBoundingBox
             dimensions = [min_box.length, min_box.width, min_box.height] # access raw output from minimum bounding box object, names don't matter yet
             dim_sorted = sorted(dimensions, reverse=True)
-            length, width, height = str(dec_to_proper_frac(roundPartial((dim_sorted[0]+(12*2.54)) / 2.54, 0.25))) + '"', \
+            length, width, height = str(dec_to_proper_frac(roundPartial((dim_sorted[0]) / 2.54, 0.25))) + '"', \
                                     str(dec_to_proper_frac(roundPartial(dim_sorted[1] / 2.54, 0.25))) + '"', \
                                     str(dec_to_proper_frac(roundPartial(dim_sorted[2] / 2.54, 0.25))) + '"'
             sel_prop["name"] = self.fusionObject.name
@@ -95,9 +95,10 @@ class SelectionHandler(adsk.core.CommandEventHandler):
             else:
                 return
             with open(filename, 'w', newline='') as csvfile:
+                fieldnames = ['Piece Name', 'Length', 'Width', 'Height']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
                 for obj in obj_properties:
-                    fieldnames = ['name', 'length', 'width', 'height']
-                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writerow(TimberData(obj).timberProperties())
 
         except:
