@@ -4,7 +4,7 @@ from fractions import Fraction
 app = None
 ui = None
 commandId = 'MinimalBoundingBoxesToCSV'
-commandName = 'MinimalBoundingBoxes'
+commandName = 'Minimal Bounding Boxes'
 commandDescription = 'Export Timber List as CSV'
 dialogTitle = "Create BOM"
 
@@ -77,8 +77,10 @@ class SelectionHandler(adsk.core.CommandEventHandler):
 
             objects = getSelectedObjects(selectionInput)
             obj_properties = {}
+
             for obj in objects:
-                obj_properties[obj.component.name] = TimberData(obj).timberProperties() # uses dictionary to eliminate duplicate occurances in the output and obtain count
+                qty = obj.sourceComponent.allOccurrencesByComponent(obj.component).count
+                obj_properties[obj.component.name] = [TimberData(obj).timberProperties(), qty] # uses dictionary to eliminate duplicate occurances in the output and obtain count
 
             if not objects or len(objects) == 0:
                 return
@@ -98,7 +100,8 @@ class SelectionHandler(adsk.core.CommandEventHandler):
                 writer = csv.writer(csvfile)
                 writer.writerow(fieldnames)
                 for name, obj in obj_properties.items():
-                    writer.writerow([name, obj["Occurrence"], obj['length'], obj['width'], obj['height']])
+                    row = [name, obj[1], obj[0]['length'], obj[0]['width'], obj[0]['height']]
+                    writer.writerow(row)
 
         except:
             if ui:
